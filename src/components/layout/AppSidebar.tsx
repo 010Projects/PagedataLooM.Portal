@@ -25,10 +25,11 @@ interface SidebarEntity {
 
 export function AppSidebar() {
   const { activeService, activeEntityKey, subscribedServices, setService, setEntityKey } = useDashboardStore()
-  const { isTenantAdmin, isPlatformAdmin } = useAuthStore()
+  const { isTenantAdmin, isPlatformAdmin, isComplianceUser } = useAuthStore()
   const navigate = useNavigate()
   const location = useLocation()
   const isSettings = location.pathname.startsWith('/settings')
+  const isCredentials = location.pathname.startsWith('/credentials')
   const { data, isLoading, isError, error } = useAuditReadiness(activeService)
 
   // The backend has no entity-list endpoint — derive distinct entities from
@@ -203,6 +204,31 @@ export function AppSidebar() {
         )}
       </div>
 
+      {/* Credentials — ComplianceUser / TenantAdmin only (R6).
+          Viewer and EntityUser must not see this. */}
+      {(isComplianceUser() || isTenantAdmin()) && (
+        <div style={{ borderTop: '0.5px solid #E2E8F0', padding: '8px 10px', flexShrink: 0 }}>
+          <button
+            onClick={() => navigate('/credentials')}
+            style={{
+              width: '100%', padding: '6px 10px 6px 14px',
+              borderTop: 'none', borderRight: 'none', borderBottom: 'none',
+              borderLeft: `2px solid ${isCredentials ? '#1E40AF' : 'transparent'}`,
+              background: isCredentials ? '#EFF6FF' : 'transparent',
+              cursor: 'pointer', textAlign: 'left',
+              display: 'flex', alignItems: 'center', gap: 7,
+              fontFamily: '"IBM Plex Sans"', fontSize: 11.5,
+              color: isCredentials ? '#1E40AF' : '#64748B',
+              fontWeight: isCredentials ? 500 : 400,
+              borderRadius: 0,
+            }}
+          >
+            <CredentialIcon />
+            Credentials
+          </button>
+        </div>
+      )}
+
       {/* Settings — TenantAdmin / PlatformAdmin only (Journey 3) */}
       {(isTenantAdmin() || isPlatformAdmin()) && (
         <div style={{ borderTop: '0.5px solid #E2E8F0', padding: '8px 10px', flexShrink: 0 }}>
@@ -256,6 +282,17 @@ function SettingsIcon() {
       aria-hidden="true">
       <circle cx="12" cy="12" r="3"/>
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  )
+}
+
+function CredentialIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true">
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>
+      <path d="m9 12 2 2 4-4"/>
     </svg>
   )
 }

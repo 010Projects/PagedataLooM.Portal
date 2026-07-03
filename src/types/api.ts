@@ -116,6 +116,21 @@ export interface UploadResponse {
   status: PipelineStatus | string
 }
 
+// ── Credential verification (R6) ──────────────────────────────────────────
+// GET /api/students/{studentId}/credentials — data is always an array.
+// Empty array = student not found (HTTP 200, success: true). No 404 path.
+export type CredentialVerificationStatus = 'Verified' | 'Expired' | 'Pending'
+
+export interface CredentialRecord {
+  documentId:         string
+  studentId:          string
+  documentTypeName:   string
+  verificationStatus: CredentialVerificationStatus
+  expiryDate:         string | null
+  uploadedAt:         string
+  fileName:           string
+}
+
 // ── Service types ─────────────────────────────────────────────────────────
 
 export type ComplianceService = 'sqas' | 'accreditation' | 'bbbee'

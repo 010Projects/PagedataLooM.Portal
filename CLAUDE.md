@@ -1,275 +1,480 @@
-# CLAUDE.md — PagedataLooM.Portal
-## Hotfix 01 — Subscription-aware service tabs
+# CLAUDE.md — R6: Credential Verification
+## Southern Labs student credential lookup UI
 
 ---
 
-## What this fixes
+## AUTONOMOUS EXECUTION MODE
 
-Every user currently sees all three service tabs (SQAS, ACCREDITATION, B-BBEE)
-regardless of what their tenant subscribes to. Tenants see tabs that return
-"No active subscription" — confusing and unprofessional for a precision tool.
-
-**After this fix:** a tenant with one subscription sees one tab.
-RS Carriers sees SQAS only. Southern Labs sees Accreditation only.
-EmpowerDEX sees B-BBEE only.
+Run all tasks in sequence without pausing for confirmation.
+All work is in `C:\Users\Bheki\source\repos\PagedataLooM.Portal`.
+Never guess field names — the API contract below is authoritative.
+Follow existing portal patterns exactly: apiClient, TanStack Query, shadcn/ui components.
+Write TypeScript throughout — no `any`, no type assertions without justification.
 
 ---
 
-## Approach
-
-On dashboard load, probe all three audit-readiness endpoints in parallel using
-`Promise.allSettled`. Endpoints that return `success: true` are subscribed.
-Endpoints that return `NO_SUBSCRIPTION` are not. Store the subscribed list in
-Zustand. The sidebar renders only subscribed tabs. The default active service
-is set to the first subscribed service.
-
-The probe runs once per session (when `subscribedServices` is null in the store).
-React Query caches the results — the sidebar's entity queries reuse them for free.
-
----
-
-## Files to change
-
-```
-src/stores/dashboard-store.ts       add subscribedServices field
-src/hooks/useSubscriptionProbe.ts   new — parallel probe hook
-src/components/layout/AppLayout.tsx call the probe hook
-src/components/layout/AppSidebar.tsx filter tabs to subscribed only
-```
-
-No backend changes. No new endpoints. No type changes.
-
----
-
-## Task 1 — Update dashboard store
-
-In `src/stores/dashboard-store.ts`, add:
-
-```typescript
-interface DashboardStore {
-  activeService:       ComplianceService
-  activeEntityKey:     string | null
-  subscribedServices:  ComplianceService[] | null   // null = probe not yet run
-  setService:          (service: ComplianceService) => void
-  setEntityKey:        (key: string) => void
-  clearEntity:         () => void
-  setSubscribedServices: (services: ComplianceService[]) => void
-}
-
-// In create():
-subscribedServices: null,
-setSubscribedServices: (services) => set({ subscribedServices: services }),
-```
-
----
-
-## Task 2 — Subscription probe hook
-
-Create `src/hooks/useSubscriptionProbe.ts`:
-
-```typescript
-import { useEffect } from 'react'
-import { useDashboardStore } from '@/stores'
-import { useIsAuthenticated } from '@azure/msal-react'
-import apiClient from '@/lib/api-client'
-import type { ComplianceService } from '@/types/api'
-
-const PROBE_ENDPOINTS: { service: ComplianceService; path: string }[] = [
-  { service: 'sqas',          path: '/api/sqas/audit-readiness'          },
-  { service: 'accreditation', path: '/api/accreditation/audit-readiness' },
-  { service: 'bbbee',         path: '/api/bbbee/audit-readiness'         },
-]
-
-export function useSubscriptionProbe() {
-  const isAuthenticated = useIsAuthenticated()
-  const { subscribedServices, setSubscribedServices, activeService, setService } =
-    useDashboardStore()
-
-  useEffect(() => {
-    // Only probe once per session and only when authenticated
-    if (!isAuthenticated || subscribedServices !== null) return
-
-    async function probe() {
-      const results = await Promise.allSettled(
-        PROBE_ENDPOINTS.map(({ path }) => apiClient.get(path))
-      )
-
-      const subscribed = PROBE_ENDPOINTS
-        .filter((_, i) => {
-          const r = results[i]
-          // Subscribed = request fulfilled AND backend returned success: true
-          return r.status === 'fulfilled' && r.value?.data?.success === true
-        })
-        .map(({ service }) => service)
-
-      setSubscribedServices(subscribed)
-
-      // If the current active service is not subscribed, switch to the first that is
-      if (subscribed.length > 0 && !subscribed.includes(activeService)) {
-        setService(subscribed[0])
-      }
-    }
-
-    probe()
-  }, [isAuthenticated, subscribedServices])
-}
-```
-
----
-
-## Task 3 — Call the probe in AppLayout
-
-In `src/components/layout/AppLayout.tsx`, add the hook call alongside `useAuth()`:
-
-```typescript
-import { useSubscriptionProbe } from '@/hooks/useSubscriptionProbe'
-
-// Inside AppLayout component, after useAuth():
-useSubscriptionProbe()
-```
-
-The probe runs once on mount after authentication. Results are cached in Zustand
-for the session lifetime.
-
----
-
-## Task 4 — Filter tabs in AppSidebar
-
-In `src/components/layout/AppSidebar.tsx`, replace the service tab rendering
-with a subscription-aware version.
-
-Find the section that maps over `SERVICES` to render the tab buttons.
-Replace it with:
-
-```typescript
-const { subscribedServices } = useDashboardStore()
-
-// While probe is running, show no tabs (brief — parallel API calls)
-if (subscribedServices === null) {
-  return (
-    <aside style={{ /* existing aside styles */ }}>
-      <div style={{ padding: '10px', height: '100%', display: 'flex',
-        flexDirection: 'column' }}>
-        <div style={{ padding: '10px 10px 8px' }}>
-          {/* Search box — unchanged */}
-        </div>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center',
-          justifyContent: 'center' }}>
-          <p style={{ fontFamily: '"IBM Plex Sans"', fontSize: 11,
-            color: '#CBD5E1', margin: 0 }}>
-            Loading…
-          </p>
-        </div>
-      </div>
-    </aside>
-  )
-}
-
-// No subscriptions at all
-if (subscribedServices.length === 0) {
-  return (
-    <aside style={{ /* existing aside styles */ }}>
-      <div style={{ padding: '1.5rem', fontFamily: '"IBM Plex Sans"' }}>
-        <p style={{ fontSize: 12, color: '#94A3B8', margin: 0 }}>
-          No active compliance subscriptions.
-        </p>
-      </div>
-    </aside>
-  )
-}
-
-// Filter SERVICES to only subscribed ones
-const visibleServices = SERVICES.filter((s) => subscribedServices.includes(s))
-```
-
-Then use `visibleServices` instead of `SERVICES` in the tab button map.
-
-If `visibleServices` has only one entry, the tab still renders (as selected and
-visually prominent) so the user knows which service they are on. Do not hide the
-tab when only one service exists — hide the **other** tabs, not this one.
-
----
-
-## Task 5 — Test
-
-Add to `src/stores/__tests__/dashboard-store.test.ts`:
-
-```typescript
-describe('subscribedServices', () => {
-  it('starts as null (probe not yet run)', () => {
-    expect(useDashboardStore.getState().subscribedServices).toBeNull()
-  })
-
-  it('setSubscribedServices stores the list', () => {
-    useDashboardStore.getState().setSubscribedServices(['sqas'])
-    expect(useDashboardStore.getState().subscribedServices).toEqual(['sqas'])
-  })
-
-  it('empty array means no subscriptions (not null)', () => {
-    useDashboardStore.getState().setSubscribedServices([])
-    expect(useDashboardStore.getState().subscribedServices).toEqual([])
-    expect(useDashboardStore.getState().subscribedServices).not.toBeNull()
-  })
-})
-```
-
-Run `npm test` — must pass.
-
----
-
-## Task 6 — Build and deploy
+## Pre-flight
 
 ```bash
-npm test          # must pass
-npm run build     # must be clean
-```
-
-```powershell
-Use-PageLooMInfra
-
-$deployToken = az staticwebapp secrets list `
-  --name swa-pageloom-dev-weu `
-  --resource-group rg-pageloom-dev-weu `
-  --query "properties.apiKey" -o tsv
-
 cd C:\Users\Bheki\source\repos\PagedataLooM.Portal
 
-swa deploy ./dist `
-  --deployment-token $deployToken `
-  --env production
+# Confirm structure
+ls src/features/
+ls src/hooks/
+ls src/types/api.ts
+ls src/lib/api-client.ts
+
+# Baseline test run
+npm run test -- --run 2>&1 | tail -20
+```
+
+Read the following files before writing any code:
+- `src/types/api.ts` — ApiEnvelope and existing domain types
+- `src/lib/api-client.ts` — axios instance and interceptors
+- `src/hooks/useCompliance.ts` — queryKeys pattern to follow
+- `src/features/dashboard/ComplianceDashboard.tsx` — layout and component conventions
+- `src/features/upload/PipelineStatus.tsx` — status display pattern
+
+Do not write any code until these files are read.
+
+---
+
+## API contract (authoritative — do not deviate)
+
+### Endpoint
+```
+GET /api/students/{studentId}/credentials
+```
+Authentication: JWT bearer (handled by apiClient interceptor).
+Tenant scope: caller's tenantId from JWT — SLI tenant only in production.
+
+### Success response — 200
+`data` is always an **array**, never a single object. Empty array = student not found.
+
+```typescript
+interface CredentialRecord {
+  documentId:         string                      // ULID, 26 chars
+  studentId:          string                      // echoes route param
+  documentTypeName:   string                      // e.g. "Student Completion Record"
+  verificationStatus: 'Verified' | 'Expired' | 'Pending'
+  expiryDate:         string | null               // "yyyy-MM-dd" date-only, null if no expiry
+  uploadedAt:         string                      // ISO 8601 with offset
+  fileName:           string                      // original upload filename
+}
+```
+
+No other fields exist. Do not add `studentName`, `programme`, `nqfLevel`, `certificateNumber`,
+or `citedDocuments` — they are not on the record.
+
+### Not-found behaviour
+**HTTP 200, `success: true`, `data: []`.** There is no 404 path.
+Empty array = "no record found". Key off `data.length === 0`, not HTTP status.
+
+### Error responses
+```typescript
+// 403 — subscription not active for tenant
+{ success: false, data: null,
+  error: { code: 'SUBSCRIPTION_INACTIVE', message: '...' }, correlationId: '...' }
+
+// 401 — missing/invalid JWT
+{ success: false, data: null,
+  error: { code: 'UNAUTHORIZED', message: '...' }, correlationId: '...' }
+```
+
+### verificationStatus display logic
+| Value | Display |
+|-------|---------|
+| `Verified` | Green "Credential verified" banner |
+| `Expired` | Amber/red "Credential expired" banner |
+| `Pending` | Blue "Processing" indicator — pipeline not complete |
+
+---
+
+## Task 1 — Add TypeScript types to `src/types/api.ts`
+
+Add to the existing types file (do not replace existing types):
+
+```typescript
+export type CredentialVerificationStatus = 'Verified' | 'Expired' | 'Pending'
+
+export interface CredentialRecord {
+  documentId:         string
+  studentId:          string
+  documentTypeName:   string
+  verificationStatus: CredentialVerificationStatus
+  expiryDate:         string | null
+  uploadedAt:         string
+  fileName:           string
+}
+```
+
+---
+
+## Task 2 — Add query hook `src/hooks/useStudentCredentials.ts`
+
+Follow the queryKeys pattern established in `useCompliance.ts`.
+
+```typescript
+import { useQuery } from '@tanstack/react-query'
+import apiClient from '@/lib/api-client'
+import type { ApiEnvelope, CredentialRecord } from '@/types/api'
+
+export const credentialQueryKeys = {
+  credentials: (studentId: string) => ['credentials', studentId] as const,
+}
+
+export function useStudentCredentials(studentId: string | null) {
+  return useQuery({
+    queryKey: credentialQueryKeys.credentials(studentId ?? ''),
+    enabled:  !!studentId?.trim(),
+    queryFn:  async () => {
+      const { data } = await apiClient.get<ApiEnvelope<CredentialRecord[]>>(
+        `/api/students/${encodeURIComponent(studentId!)}/credentials`
+      )
+      return data
+    },
+  })
+}
+```
+
+No `refetchInterval` — credential lookup is a one-shot query, not a polling operation.
+
+---
+
+## Task 3 — MSW handlers `src/mocks/handlers/credentials.ts`
+
+Add handlers alongside existing mock handlers. Check `src/mocks/handlers/` for the
+existing handler file pattern and import/export convention — match it exactly.
+
+```typescript
+import { http, HttpResponse } from 'msw'
+import type { ApiEnvelope, CredentialRecord } from '@/types/api'
+
+const BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+
+const verifiedStudent: CredentialRecord = {
+  documentId:         '01JWABCDEF1234567890ABCDEF',
+  studentId:          'SLI-STU-001',
+  documentTypeName:   'Student Completion Record',
+  verificationStatus: 'Verified',
+  expiryDate:         null,
+  uploadedAt:         '2026-01-15T09:00:00.000+02:00',
+  fileName:           'completion-certificate-stu001.pdf',
+}
+
+const pendingStudent: CredentialRecord = {
+  documentId:         '01JWABCDEF1234567890ABCDEG',
+  studentId:          'SLI-STU-002',
+  documentTypeName:   'Student Completion Record',
+  verificationStatus: 'Pending',
+  expiryDate:         null,
+  uploadedAt:         '2026-06-14T11:30:00.000+02:00',
+  fileName:           'completion-certificate-stu002.pdf',
+}
+
+const expiredStudent: CredentialRecord = {
+  documentId:         '01JWABCDEF1234567890ABCDEH',
+  studentId:          'SLI-STU-003',
+  documentTypeName:   'Student Completion Record',
+  verificationStatus: 'Expired',
+  expiryDate:         '2025-12-31',
+  uploadedAt:         '2025-01-10T08:00:00.000+02:00',
+  fileName:           'completion-certificate-stu003.pdf',
+}
+
+function okEnvelope<T>(data: T, correlationId = 'mock-correlation-id'): ApiEnvelope<T> {
+  return { success: true, data, error: null, correlationId }
+}
+
+export const credentialHandlers = [
+  http.get(`${BASE}/api/students/:studentId/credentials`, ({ params }) => {
+    const { studentId } = params as { studentId: string }
+
+    if (studentId === 'SLI-STU-001') {
+      return HttpResponse.json(okEnvelope([verifiedStudent]))
+    }
+    if (studentId === 'SLI-STU-002') {
+      return HttpResponse.json(okEnvelope([pendingStudent]))
+    }
+    if (studentId === 'SLI-STU-003') {
+      return HttpResponse.json(okEnvelope([expiredStudent]))
+    }
+    // Not found — 200 with empty array
+    return HttpResponse.json(okEnvelope([]))
+  }),
+]
+```
+
+Register `credentialHandlers` in the root handler array — check `src/mocks/handlers/index.ts`
+(or equivalent) and add the import and spread there.
+
+---
+
+## Task 4 — Credential card component `src/features/credentials/CredentialCard.tsx`
+
+```typescript
+import type { CredentialRecord } from '@/types/api'
+
+interface CredentialCardProps {
+  credential: CredentialRecord
+}
+
+export function CredentialCard({ credential }: CredentialCardProps) {
+  const { verificationStatus, documentTypeName, expiryDate, uploadedAt, fileName } = credential
+
+  const bannerConfig = {
+    Verified: { label: 'Credential verified',  bg: '#F0FDF4', border: '#BBF7D0', color: '#15803D' },
+    Expired:  { label: 'Credential expired',   bg: '#FFF7ED', border: '#FED7AA', color: '#C2410C' },
+    Pending:  { label: 'Processing',           bg: '#EFF6FF', border: '#BFDBFE', color: '#1E40AF' },
+  }[verificationStatus]
+
+  const formattedUpload = new Date(uploadedAt).toLocaleDateString('en-ZA', {
+    day: '2-digit', month: 'short', year: 'numeric',
+  })
+
+  const formattedExpiry = expiryDate
+    ? new Date(expiryDate).toLocaleDateString('en-ZA', {
+        day: '2-digit', month: 'short', year: 'numeric',
+      })
+    : null
+
+  return (
+    <div style={{
+      border: `1px solid ${bannerConfig.border}`,
+      borderRadius: 8,
+      overflow: 'hidden',
+      fontFamily: '"IBM Plex Sans", sans-serif',
+    }}>
+      {/* Status banner */}
+      <div style={{
+        background: bannerConfig.bg,
+        borderBottom: `1px solid ${bannerConfig.border}`,
+        padding: '10px 16px',
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <span style={{
+          fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
+          textTransform: 'uppercase', color: bannerConfig.color,
+        }}>
+          {bannerConfig.label}
+        </span>
+      </div>
+
+      {/* Detail rows */}
+      <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <DetailRow label="Document type"  value={documentTypeName} />
+        <DetailRow label="Uploaded"        value={formattedUpload} />
+        {formattedExpiry && (
+          <DetailRow
+            label="Expires"
+            value={formattedExpiry}
+            valueStyle={verificationStatus === 'Expired' ? { color: '#C2410C', fontWeight: 600 } : undefined}
+          />
+        )}
+        <DetailRow label="File" value={fileName} />
+      </div>
+    </div>
+  )
+}
+
+function DetailRow({
+  label, value, valueStyle,
+}: {
+  label: string
+  value: string
+  valueStyle?: React.CSSProperties
+}) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+      <span style={{ fontSize: 12, color: '#64748B', flexShrink: 0 }}>{label}</span>
+      <span style={{ fontSize: 12, color: '#0F172A', textAlign: 'right', ...valueStyle }}>{value}</span>
+    </div>
+  )
+}
+```
+
+---
+
+## Task 5 — Credential verification page `src/features/credentials/CredentialVerificationPage.tsx`
+
+```typescript
+import { useState } from 'react'
+import { useStudentCredentials } from '@/hooks/useStudentCredentials'
+import { CredentialCard } from './CredentialCard'
+
+export function CredentialVerificationPage() {
+  const [inputValue, setInputValue]   = useState('')
+  const [studentId,  setStudentId]    = useState<string | null>(null)
+
+  const { data, isLoading, isError } = useStudentCredentials(studentId)
+
+  const credentials = data?.data ?? []
+  const searched    = studentId !== null
+
+  function handleSearch() {
+    const trimmed = inputValue.trim()
+    if (!trimmed) return
+    setStudentId(trimmed)
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') handleSearch()
+  }
+
+  return (
+    <div style={{ maxWidth: 560, margin: '0 auto', padding: '32px 16px',
+      fontFamily: '"IBM Plex Sans", sans-serif' }}>
+      <h1 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A', margin: '0 0 4px' }}>
+        Credential Verification
+      </h1>
+      <p style={{ fontSize: 13, color: '#64748B', margin: '0 0 24px' }}>
+        Enter a student number to verify their qualification records.
+      </p>
+
+      {/* Search bar */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
+        <input
+          type="text"
+          placeholder="Student number"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          style={{
+            flex: 1, height: 38, padding: '0 12px', borderRadius: 6,
+            border: '1px solid #CBD5E1', fontSize: 13, fontFamily: 'inherit',
+            outline: 'none',
+          }}
+        />
+        <button
+          onClick={handleSearch}
+          disabled={isLoading || !inputValue.trim()}
+          style={{
+            height: 38, padding: '0 18px', borderRadius: 6,
+            background: '#0F172A', color: '#FFFFFF', border: 'none',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            opacity: (isLoading || !inputValue.trim()) ? 0.5 : 1,
+          }}
+        >
+          {isLoading ? 'Searching…' : 'Search'}
+        </button>
+      </div>
+
+      {/* Results */}
+      {isError && (
+        <p style={{ fontSize: 13, color: '#C2410C' }}>
+          An error occurred. Please try again.
+        </p>
+      )}
+
+      {searched && !isLoading && !isError && credentials.length === 0 && (
+        <div style={{
+          padding: '20px 16px', borderRadius: 8,
+          border: '1px solid #E2E8F0', background: '#F8FAFC', textAlign: 'center',
+        }}>
+          <p style={{ fontSize: 13, color: '#64748B', margin: 0 }}>
+            No credential records found for <strong>{studentId}</strong>.
+          </p>
+        </div>
+      )}
+
+      {credentials.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {credentials.map((c) => (
+            <CredentialCard key={c.documentId} credential={c} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+---
+
+## Task 6 — Route registration
+
+Read the existing router file to find where routes are declared (likely `src/App.tsx`,
+`src/router.tsx`, or `src/routes.tsx`). Read it before editing.
+
+Add the credentials route following the existing pattern. Likely:
+
+```typescript
+import { CredentialVerificationPage } from '@/features/credentials/CredentialVerificationPage'
+
+// Inside route definitions:
+{ path: '/credentials', element: <CredentialVerificationPage /> }
+```
+
+Add a nav link in the sidebar/nav component if one exists, following the existing nav item pattern.
+Scope visibility to `ComplianceUser` and `TenantAdmin` roles only — check how existing nav items
+gate on role and apply the same pattern. `Viewer` and `EntityUser` must not see this nav item.
+
+---
+
+## Task 7 — Unit tests
+
+Add tests in `src/features/credentials/__tests__/CredentialCard.test.tsx`:
+
+```typescript
+import { render, screen } from '@testing-library/react'
+import { CredentialCard } from '../CredentialCard'
+import type { CredentialRecord } from '@/types/api'
+
+const base: CredentialRecord = {
+  documentId:         '01JWABCDEF1234567890ABCDEF',
+  studentId:          'SLI-STU-001',
+  documentTypeName:   'Student Completion Record',
+  verificationStatus: 'Verified',
+  expiryDate:         null,
+  uploadedAt:         '2026-01-15T09:00:00.000+02:00',
+  fileName:           'cert.pdf',
+}
+
+test('shows verified banner for Verified status', () => {
+  render(<CredentialCard credential={base} />)
+  expect(screen.getByText(/credential verified/i)).toBeTruthy()
+})
+
+test('shows expired banner for Expired status', () => {
+  render(<CredentialCard credential={{ ...base, verificationStatus: 'Expired', expiryDate: '2025-12-31' }} />)
+  expect(screen.getByText(/credential expired/i)).toBeTruthy()
+})
+
+test('shows processing banner for Pending status', () => {
+  render(<CredentialCard credential={{ ...base, verificationStatus: 'Pending' }} />)
+  expect(screen.getByText(/processing/i)).toBeTruthy()
+})
+
+test('renders expiry date when present', () => {
+  render(<CredentialCard credential={{ ...base, expiryDate: '2027-06-15' }} />)
+  expect(screen.getByText(/expires/i)).toBeTruthy()
+})
+
+test('omits expiry row when expiryDate is null', () => {
+  render(<CredentialCard credential={{ ...base, expiryDate: null }} />)
+  expect(screen.queryByText(/expires/i)).toBeNull()
+})
 ```
 
 ---
 
 ## Verification
 
-Sign in as each account on the production URL and confirm:
+```bash
+# Type check
+npx tsc --noEmit
 
-| Account | Expected tabs | Must NOT show |
-|---|---|---|
-| `rscarriers-admin` | SQAS only | ACCREDITATION, B-BBEE |
-| `southernlabs-admin` | ACCREDITATION only | SQAS, B-BBEE |
-| `empowerdex-admin` | B-BBEE only | SQAS, ACCREDITATION |
+# Tests — all must pass
+npm run test -- --run 2>&1 | tail -20
 
----
-
-## Commit message
-
+# Dev server smoke test
+npm run dev
+# Manually navigate to /credentials in browser
+# Search SLI-STU-001 → Verified card
+# Search SLI-STU-002 → Pending card
+# Search SLI-STU-003 → Expired card
+# Search UNKNOWN-999 → "No credential records found"
 ```
-fix: show only subscribed service tabs per tenant
-```
 
----
-
-## Do not
-
-- Do not make the probe call on every render. The `subscribedServices !== null`
-  guard in the effect ensures it runs exactly once per session.
-- Do not show the loading state for more than a second. If the probe is slow,
-  investigate network issues rather than extending the loading UI.
-- Do not remove the SERVICES constant — it is still used as the source of truth
-  for ordering. Filter it, do not replace it.
-
----
-
-*Hotfix 01 · Pre-client-go-live · PagedataLooM.Portal*
+Report back: tsc output, test results (pass count), and confirmation that all four
+MSW states rendered correctly in the browser.

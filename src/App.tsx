@@ -7,6 +7,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { DashboardStub } from '@/features/dashboard/DashboardStub'
 import { UploadStub } from '@/features/upload/UploadStub'
 import { SettingsStub } from '@/features/settings/SettingsStub'
+import { CredentialVerificationPage } from '@/features/credentials/CredentialVerificationPage'
 
 function AuthRedirect() {
   const isAuthenticated = useIsAuthenticated()
@@ -32,8 +33,9 @@ export default function App() {
           }
         >
           <Route index element={<AuthRedirect />} />
-          <Route path="dashboard" element={<DashboardStub />} />
-          <Route path="upload"    element={<UploadStub />} />
+          <Route path="dashboard"   element={<DashboardStub />} />
+          <Route path="upload"      element={<UploadStub />} />
+          <Route path="credentials" element={<CredentialVerificationPage />} />
           <Route path="settings"               element={<SettingsStub />} />
           <Route path="settings/notifications" element={<SettingsStub />} />
         </Route>

@@ -23,7 +23,18 @@ const queryClient = new QueryClient({
   },
 })
 
-msalInstance.initialize().then(() => {
+// Start the MSW browser worker in dev when VITE_ENABLE_MSW=true. Dynamic import
+// keeps MSW out of the production bundle. Unhandled requests (e.g. MSAL/Entra
+// auth traffic) bypass to the real network.
+async function enableMocking(): Promise<void> {
+  if (!import.meta.env.DEV || import.meta.env.VITE_ENABLE_MSW !== 'true') return
+  const { worker } = await import('@/mocks/browser')
+  await worker.start({ onUnhandledRequest: 'bypass' })
+}
+
+enableMocking()
+  .then(() => msalInstance.initialize())
+  .then(() => {
   // Expose instance for the API interceptor (typed in lib/api-client.ts)
   window.__msalInstance = msalInstance
 
