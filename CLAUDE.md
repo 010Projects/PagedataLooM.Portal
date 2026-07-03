@@ -1,480 +1,152 @@
-# CLAUDE.md — R6: Credential Verification
-## Southern Labs student credential lookup UI
+# CLAUDE.md — Portal (dev): env-driven authority fix + dev config + deploy pipeline
+
+## Context
+PagedataLooM Portal — React/Vite customer-facing SPA. Deploying the DEV environment first.
+Azure side ready:
+- Dev SWA deployed: `swa-pagedataloom-dev-weu` in `rg-pagedataloom-dev-weu`,
+  hostname `gray-moss-074a51a03.7.azurestaticapps.net`
+- Portal dev deploy identity (OIDC): client `ad1e84c3-7020-40ad-b50f-f41c3dd795d6`, federated to
+  `repo:010Projects/PagedataLooM.Portal:ref:refs/heads/main`, Contributor on `rg-pagedataloom-dev-weu`
+- Portal dev app registration (customer sign-in): client `bca4a6c5-a364-4413-a465-835987013a6f`
+  in the PagedataLooM-Dev External ID tenant (`c5497d2a-...`)
+
+Portal is customer-facing → dev/prod config is BUILD-TIME (no runtime env switch; a customer sees
+exactly one environment). This task does DEV only; prod is a later mirror.
+
+## Three parts
+A. Fix `src/lib/msal-config.ts` — the authority is currently hardcoded to the WORKFORCE endpoint
+   `login.microsoftonline.com`, which is WRONG for External ID customers. Make it env-driven so it
+   uses the External ID `ciamlogin.com` endpoint.
+B. Add `.env.development` with the dev build config (non-secret public client ID etc.).
+C. Add `.github/workflows/deploy.yml` — build with dev config, deploy to the dev SWA via OIDC.
+
+## Constraints
+- Do NOT hardcode tenant/client values in msal-config.ts — read from import.meta.env.
+- The client IDs here are NON-SECRET public SPA client IDs — safe to commit in .env.development.
+- Do NOT commit .env.local or .env.*.local (already gitignored — leave them alone).
+- Pipeline: OIDC only (no stored secret), `vars.AZURE_CLIENT_ID` etc., NO GitHub environment
+  (federated subject is branch-based), fetch SWA deploy token at runtime via az CLI (do NOT store).
+- Build stays `tsc -b && vite build`; output dir `dist`.
+- Preserve MSW toggle (VITE_ENABLE_MSW) and all existing Portal features.
 
 ---
 
-## AUTONOMOUS EXECUTION MODE
+## Part A — src/lib/msal-config.ts (authority fix)
 
-Run all tasks in sequence without pausing for confirmation.
-All work is in `C:\Users\Bheki\source\repos\PagedataLooM.Portal`.
-Never guess field names — the API contract below is authoritative.
-Follow existing portal patterns exactly: apiClient, TanStack Query, shadcn/ui components.
-Write TypeScript throughout — no `any`, no type assertions without justification.
+Change the `authority` line so it reads a full authority URL from env, with knownAuthorities, and
+falls back sensibly. Replace:
+```ts
+    authority: `https://login.microsoftonline.com/${import.meta.env.VITE_MSAL_TENANT_ID}`,
+```
+with an env-driven authority + knownAuthorities:
+```ts
+    authority: import.meta.env.VITE_MSAL_AUTHORITY,
+    knownAuthorities: (import.meta.env.VITE_MSAL_KNOWN_AUTHORITIES ?? '')
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter(Boolean),
+```
+Keep clientId, redirectUri, postLogoutRedirectUri, cache, system exactly as they are.
+(The apiScope via VITE_MSAL_API_SCOPE and the loginRequest/tokenRequest stay unchanged.)
 
----
+## Part B — .env.development (dev build config)
+Create `.env.development` at repo root (Vite auto-loads it for `vite build` in development mode
+and `npm run dev`). Content:
+```
+VITE_MSAL_CLIENT_ID=bca4a6c5-a364-4413-a465-835987013a6f
+VITE_MSAL_TENANT_ID=c5497d2a-27f6-411d-b937-468c820e2095
+VITE_MSAL_AUTHORITY=https://pagedataloomdev.ciamlogin.com/c5497d2a-27f6-411d-b937-468c820e2095
+VITE_MSAL_KNOWN_AUTHORITIES=pagedataloomdev.ciamlogin.com
+VITE_MSAL_API_SCOPE=api://29a7655c-aa15-4765-8eef-20c6af7a7126/access_as_user
+VITE_MSAL_REDIRECT_URI=https://gray-moss-074a51a03.7.azurestaticapps.net
+VITE_API_BASE_URL=https://func-pageloom-dev-weu.azurewebsites.net
+VITE_APP_ENV=development
+VITE_ENABLE_MSW=false
+```
+NOTE: these are non-secret public client IDs + public endpoints — safe to commit. Do NOT put any
+secret here.
 
-## Pre-flight
+IMPORTANT — the pipeline builds in production mode by default (`vite build`), which loads
+`.env.production`, NOT `.env.development`. Two options — pick the one that fits how the pipeline
+should build DEV:
+  (1) Simplest for now: have the workflow build with `--mode development` so Vite loads
+      `.env.development`. (Set in the workflow build step: `npx vite build --mode development`,
+      keeping `tsc -b` before it.)
+  (2) Later, for prod, add `.env.production` with prod values and build normally.
+Use option (1) for this dev pipeline so `.env.development` is the source of truth.
 
-```bash
-cd C:\Users\Bheki\source\repos\PagedataLooM.Portal
+## Part C — .github/workflows/deploy.yml
+```yaml
+name: Deploy Portal (dev)
 
-# Confirm structure
-ls src/features/
-ls src/hooks/
-ls src/types/api.ts
-ls src/lib/api-client.ts
+on:
+  push:
+    branches: [main]
 
-# Baseline test run
-npm run test -- --run 2>&1 | tail -20
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install
+        run: npm ci
+      - name: Build (dev mode)
+        run: |
+          npx tsc -b
+          npx vite build --mode development
+
+      - name: Azure login (OIDC, no secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get SWA deployment token
+        id: swatoken
+        run: |
+          TOKEN=$(az staticwebapp secrets list \
+            --name swa-pagedataloom-dev-weu \
+            --resource-group rg-pagedataloom-dev-weu \
+            --query "properties.apiKey" -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Static Web App
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swatoken.outputs.token }}
+          action: 'upload'
+          app_location: 'dist'
+          skip_app_build: true
 ```
 
-Read the following files before writing any code:
-- `src/types/api.ts` — ApiEnvelope and existing domain types
-- `src/lib/api-client.ts` — axios instance and interceptors
-- `src/hooks/useCompliance.ts` — queryKeys pattern to follow
-- `src/features/dashboard/ComplianceDashboard.tsx` — layout and component conventions
-- `src/features/upload/PipelineStatus.tsx` — status display pattern
+## Verify after edit
+- `npm run build` still succeeds (or `npx tsc -b && npx vite build --mode development`)
+- msal-config.ts reads VITE_MSAL_AUTHORITY (no hardcoded login.microsoftonline.com left)
+- .env.development exists with the dev values; no .env.local committed
+- deploy.yml uses azure/login@v2 + vars.*, no stored secret, no GitHub environment
+- If the lock file is Windows-generated and `npm ci` fails on Linux with missing optional native
+  deps (like zOz hit with @emnapi/*), regenerate cross-platform:
+  `npm install --os=linux --cpu=x64 --include=optional` then commit package-lock.json.
 
-Do not write any code until these files are read.
-
----
-
-## API contract (authoritative — do not deviate)
-
-### Endpoint
+## After Claude Code — human steps
+1. Repo VARIABLES on 010Projects/PagedataLooM.Portal (Settings → Secrets and variables → Actions →
+   Variables tab, NOT secrets):
+   - AZURE_CLIENT_ID = ad1e84c3-7020-40ad-b50f-f41c3dd795d6
+   - AZURE_TENANT_ID = e1f6457f-dca9-4e65-9782-6eb63cfd6a58
+   - AZURE_SUBSCRIPTION_ID = aa56e865-753e-4f0d-948c-5d9a36629980
+2. Add redirect URI on the Portal DEV app registration (bca4a6c5..., in PagedataLooM-Dev tenant):
+   Authentication → Single-page application → add
+   `https://gray-moss-074a51a03.7.azurestaticapps.net` → Save
+3. Commit + push to main → pipeline builds & deploys to swa-pagedataloom-dev-weu
+4. Visit https://gray-moss-074a51a03.7.azurestaticapps.net → sign in as a dev tenant user →
+   confirm Portal loads and auth works against the dev External ID tenant.
 ```
-GET /api/students/{studentId}/credentials
-```
-Authentication: JWT bearer (handled by apiClient interceptor).
-Tenant scope: caller's tenantId from JWT — SLI tenant only in production.
-
-### Success response — 200
-`data` is always an **array**, never a single object. Empty array = student not found.
-
-```typescript
-interface CredentialRecord {
-  documentId:         string                      // ULID, 26 chars
-  studentId:          string                      // echoes route param
-  documentTypeName:   string                      // e.g. "Student Completion Record"
-  verificationStatus: 'Verified' | 'Expired' | 'Pending'
-  expiryDate:         string | null               // "yyyy-MM-dd" date-only, null if no expiry
-  uploadedAt:         string                      // ISO 8601 with offset
-  fileName:           string                      // original upload filename
-}
-```
-
-No other fields exist. Do not add `studentName`, `programme`, `nqfLevel`, `certificateNumber`,
-or `citedDocuments` — they are not on the record.
-
-### Not-found behaviour
-**HTTP 200, `success: true`, `data: []`.** There is no 404 path.
-Empty array = "no record found". Key off `data.length === 0`, not HTTP status.
-
-### Error responses
-```typescript
-// 403 — subscription not active for tenant
-{ success: false, data: null,
-  error: { code: 'SUBSCRIPTION_INACTIVE', message: '...' }, correlationId: '...' }
-
-// 401 — missing/invalid JWT
-{ success: false, data: null,
-  error: { code: 'UNAUTHORIZED', message: '...' }, correlationId: '...' }
-```
-
-### verificationStatus display logic
-| Value | Display |
-|-------|---------|
-| `Verified` | Green "Credential verified" banner |
-| `Expired` | Amber/red "Credential expired" banner |
-| `Pending` | Blue "Processing" indicator — pipeline not complete |
-
----
-
-## Task 1 — Add TypeScript types to `src/types/api.ts`
-
-Add to the existing types file (do not replace existing types):
-
-```typescript
-export type CredentialVerificationStatus = 'Verified' | 'Expired' | 'Pending'
-
-export interface CredentialRecord {
-  documentId:         string
-  studentId:          string
-  documentTypeName:   string
-  verificationStatus: CredentialVerificationStatus
-  expiryDate:         string | null
-  uploadedAt:         string
-  fileName:           string
-}
-```
-
----
-
-## Task 2 — Add query hook `src/hooks/useStudentCredentials.ts`
-
-Follow the queryKeys pattern established in `useCompliance.ts`.
-
-```typescript
-import { useQuery } from '@tanstack/react-query'
-import apiClient from '@/lib/api-client'
-import type { ApiEnvelope, CredentialRecord } from '@/types/api'
-
-export const credentialQueryKeys = {
-  credentials: (studentId: string) => ['credentials', studentId] as const,
-}
-
-export function useStudentCredentials(studentId: string | null) {
-  return useQuery({
-    queryKey: credentialQueryKeys.credentials(studentId ?? ''),
-    enabled:  !!studentId?.trim(),
-    queryFn:  async () => {
-      const { data } = await apiClient.get<ApiEnvelope<CredentialRecord[]>>(
-        `/api/students/${encodeURIComponent(studentId!)}/credentials`
-      )
-      return data
-    },
-  })
-}
-```
-
-No `refetchInterval` — credential lookup is a one-shot query, not a polling operation.
-
----
-
-## Task 3 — MSW handlers `src/mocks/handlers/credentials.ts`
-
-Add handlers alongside existing mock handlers. Check `src/mocks/handlers/` for the
-existing handler file pattern and import/export convention — match it exactly.
-
-```typescript
-import { http, HttpResponse } from 'msw'
-import type { ApiEnvelope, CredentialRecord } from '@/types/api'
-
-const BASE = import.meta.env.VITE_API_BASE_URL ?? ''
-
-const verifiedStudent: CredentialRecord = {
-  documentId:         '01JWABCDEF1234567890ABCDEF',
-  studentId:          'SLI-STU-001',
-  documentTypeName:   'Student Completion Record',
-  verificationStatus: 'Verified',
-  expiryDate:         null,
-  uploadedAt:         '2026-01-15T09:00:00.000+02:00',
-  fileName:           'completion-certificate-stu001.pdf',
-}
-
-const pendingStudent: CredentialRecord = {
-  documentId:         '01JWABCDEF1234567890ABCDEG',
-  studentId:          'SLI-STU-002',
-  documentTypeName:   'Student Completion Record',
-  verificationStatus: 'Pending',
-  expiryDate:         null,
-  uploadedAt:         '2026-06-14T11:30:00.000+02:00',
-  fileName:           'completion-certificate-stu002.pdf',
-}
-
-const expiredStudent: CredentialRecord = {
-  documentId:         '01JWABCDEF1234567890ABCDEH',
-  studentId:          'SLI-STU-003',
-  documentTypeName:   'Student Completion Record',
-  verificationStatus: 'Expired',
-  expiryDate:         '2025-12-31',
-  uploadedAt:         '2025-01-10T08:00:00.000+02:00',
-  fileName:           'completion-certificate-stu003.pdf',
-}
-
-function okEnvelope<T>(data: T, correlationId = 'mock-correlation-id'): ApiEnvelope<T> {
-  return { success: true, data, error: null, correlationId }
-}
-
-export const credentialHandlers = [
-  http.get(`${BASE}/api/students/:studentId/credentials`, ({ params }) => {
-    const { studentId } = params as { studentId: string }
-
-    if (studentId === 'SLI-STU-001') {
-      return HttpResponse.json(okEnvelope([verifiedStudent]))
-    }
-    if (studentId === 'SLI-STU-002') {
-      return HttpResponse.json(okEnvelope([pendingStudent]))
-    }
-    if (studentId === 'SLI-STU-003') {
-      return HttpResponse.json(okEnvelope([expiredStudent]))
-    }
-    // Not found — 200 with empty array
-    return HttpResponse.json(okEnvelope([]))
-  }),
-]
-```
-
-Register `credentialHandlers` in the root handler array — check `src/mocks/handlers/index.ts`
-(or equivalent) and add the import and spread there.
-
----
-
-## Task 4 — Credential card component `src/features/credentials/CredentialCard.tsx`
-
-```typescript
-import type { CredentialRecord } from '@/types/api'
-
-interface CredentialCardProps {
-  credential: CredentialRecord
-}
-
-export function CredentialCard({ credential }: CredentialCardProps) {
-  const { verificationStatus, documentTypeName, expiryDate, uploadedAt, fileName } = credential
-
-  const bannerConfig = {
-    Verified: { label: 'Credential verified',  bg: '#F0FDF4', border: '#BBF7D0', color: '#15803D' },
-    Expired:  { label: 'Credential expired',   bg: '#FFF7ED', border: '#FED7AA', color: '#C2410C' },
-    Pending:  { label: 'Processing',           bg: '#EFF6FF', border: '#BFDBFE', color: '#1E40AF' },
-  }[verificationStatus]
-
-  const formattedUpload = new Date(uploadedAt).toLocaleDateString('en-ZA', {
-    day: '2-digit', month: 'short', year: 'numeric',
-  })
-
-  const formattedExpiry = expiryDate
-    ? new Date(expiryDate).toLocaleDateString('en-ZA', {
-        day: '2-digit', month: 'short', year: 'numeric',
-      })
-    : null
-
-  return (
-    <div style={{
-      border: `1px solid ${bannerConfig.border}`,
-      borderRadius: 8,
-      overflow: 'hidden',
-      fontFamily: '"IBM Plex Sans", sans-serif',
-    }}>
-      {/* Status banner */}
-      <div style={{
-        background: bannerConfig.bg,
-        borderBottom: `1px solid ${bannerConfig.border}`,
-        padding: '10px 16px',
-        display: 'flex', alignItems: 'center', gap: 8,
-      }}>
-        <span style={{
-          fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
-          textTransform: 'uppercase', color: bannerConfig.color,
-        }}>
-          {bannerConfig.label}
-        </span>
-      </div>
-
-      {/* Detail rows */}
-      <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <DetailRow label="Document type"  value={documentTypeName} />
-        <DetailRow label="Uploaded"        value={formattedUpload} />
-        {formattedExpiry && (
-          <DetailRow
-            label="Expires"
-            value={formattedExpiry}
-            valueStyle={verificationStatus === 'Expired' ? { color: '#C2410C', fontWeight: 600 } : undefined}
-          />
-        )}
-        <DetailRow label="File" value={fileName} />
-      </div>
-    </div>
-  )
-}
-
-function DetailRow({
-  label, value, valueStyle,
-}: {
-  label: string
-  value: string
-  valueStyle?: React.CSSProperties
-}) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-      <span style={{ fontSize: 12, color: '#64748B', flexShrink: 0 }}>{label}</span>
-      <span style={{ fontSize: 12, color: '#0F172A', textAlign: 'right', ...valueStyle }}>{value}</span>
-    </div>
-  )
-}
-```
-
----
-
-## Task 5 — Credential verification page `src/features/credentials/CredentialVerificationPage.tsx`
-
-```typescript
-import { useState } from 'react'
-import { useStudentCredentials } from '@/hooks/useStudentCredentials'
-import { CredentialCard } from './CredentialCard'
-
-export function CredentialVerificationPage() {
-  const [inputValue, setInputValue]   = useState('')
-  const [studentId,  setStudentId]    = useState<string | null>(null)
-
-  const { data, isLoading, isError } = useStudentCredentials(studentId)
-
-  const credentials = data?.data ?? []
-  const searched    = studentId !== null
-
-  function handleSearch() {
-    const trimmed = inputValue.trim()
-    if (!trimmed) return
-    setStudentId(trimmed)
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') handleSearch()
-  }
-
-  return (
-    <div style={{ maxWidth: 560, margin: '0 auto', padding: '32px 16px',
-      fontFamily: '"IBM Plex Sans", sans-serif' }}>
-      <h1 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A', margin: '0 0 4px' }}>
-        Credential Verification
-      </h1>
-      <p style={{ fontSize: 13, color: '#64748B', margin: '0 0 24px' }}>
-        Enter a student number to verify their qualification records.
-      </p>
-
-      {/* Search bar */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
-        <input
-          type="text"
-          placeholder="Student number"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          style={{
-            flex: 1, height: 38, padding: '0 12px', borderRadius: 6,
-            border: '1px solid #CBD5E1', fontSize: 13, fontFamily: 'inherit',
-            outline: 'none',
-          }}
-        />
-        <button
-          onClick={handleSearch}
-          disabled={isLoading || !inputValue.trim()}
-          style={{
-            height: 38, padding: '0 18px', borderRadius: 6,
-            background: '#0F172A', color: '#FFFFFF', border: 'none',
-            fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            opacity: (isLoading || !inputValue.trim()) ? 0.5 : 1,
-          }}
-        >
-          {isLoading ? 'Searching…' : 'Search'}
-        </button>
-      </div>
-
-      {/* Results */}
-      {isError && (
-        <p style={{ fontSize: 13, color: '#C2410C' }}>
-          An error occurred. Please try again.
-        </p>
-      )}
-
-      {searched && !isLoading && !isError && credentials.length === 0 && (
-        <div style={{
-          padding: '20px 16px', borderRadius: 8,
-          border: '1px solid #E2E8F0', background: '#F8FAFC', textAlign: 'center',
-        }}>
-          <p style={{ fontSize: 13, color: '#64748B', margin: 0 }}>
-            No credential records found for <strong>{studentId}</strong>.
-          </p>
-        </div>
-      )}
-
-      {credentials.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {credentials.map((c) => (
-            <CredentialCard key={c.documentId} credential={c} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-```
-
----
-
-## Task 6 — Route registration
-
-Read the existing router file to find where routes are declared (likely `src/App.tsx`,
-`src/router.tsx`, or `src/routes.tsx`). Read it before editing.
-
-Add the credentials route following the existing pattern. Likely:
-
-```typescript
-import { CredentialVerificationPage } from '@/features/credentials/CredentialVerificationPage'
-
-// Inside route definitions:
-{ path: '/credentials', element: <CredentialVerificationPage /> }
-```
-
-Add a nav link in the sidebar/nav component if one exists, following the existing nav item pattern.
-Scope visibility to `ComplianceUser` and `TenantAdmin` roles only — check how existing nav items
-gate on role and apply the same pattern. `Viewer` and `EntityUser` must not see this nav item.
-
----
-
-## Task 7 — Unit tests
-
-Add tests in `src/features/credentials/__tests__/CredentialCard.test.tsx`:
-
-```typescript
-import { render, screen } from '@testing-library/react'
-import { CredentialCard } from '../CredentialCard'
-import type { CredentialRecord } from '@/types/api'
-
-const base: CredentialRecord = {
-  documentId:         '01JWABCDEF1234567890ABCDEF',
-  studentId:          'SLI-STU-001',
-  documentTypeName:   'Student Completion Record',
-  verificationStatus: 'Verified',
-  expiryDate:         null,
-  uploadedAt:         '2026-01-15T09:00:00.000+02:00',
-  fileName:           'cert.pdf',
-}
-
-test('shows verified banner for Verified status', () => {
-  render(<CredentialCard credential={base} />)
-  expect(screen.getByText(/credential verified/i)).toBeTruthy()
-})
-
-test('shows expired banner for Expired status', () => {
-  render(<CredentialCard credential={{ ...base, verificationStatus: 'Expired', expiryDate: '2025-12-31' }} />)
-  expect(screen.getByText(/credential expired/i)).toBeTruthy()
-})
-
-test('shows processing banner for Pending status', () => {
-  render(<CredentialCard credential={{ ...base, verificationStatus: 'Pending' }} />)
-  expect(screen.getByText(/processing/i)).toBeTruthy()
-})
-
-test('renders expiry date when present', () => {
-  render(<CredentialCard credential={{ ...base, expiryDate: '2027-06-15' }} />)
-  expect(screen.getByText(/expires/i)).toBeTruthy()
-})
-
-test('omits expiry row when expiryDate is null', () => {
-  render(<CredentialCard credential={{ ...base, expiryDate: null }} />)
-  expect(screen.queryByText(/expires/i)).toBeNull()
-})
-```
-
----
-
-## Verification
-
-```bash
-# Type check
-npx tsc --noEmit
-
-# Tests — all must pass
-npm run test -- --run 2>&1 | tail -20
-
-# Dev server smoke test
-npm run dev
-# Manually navigate to /credentials in browser
-# Search SLI-STU-001 → Verified card
-# Search SLI-STU-002 → Pending card
-# Search SLI-STU-003 → Expired card
-# Search UNKNOWN-999 → "No credential records found"
-```
-
-Report back: tsc output, test results (pass count), and confirmation that all four
-MSW states rendered correctly in the browser.

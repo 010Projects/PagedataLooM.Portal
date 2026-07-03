@@ -3,7 +3,11 @@ import type { Configuration, RedirectRequest, SilentRequest } from '@azure/msal-
 export const msalConfig: Configuration = {
   auth: {
     clientId: import.meta.env.VITE_MSAL_CLIENT_ID,
-    authority: `https://login.microsoftonline.com/${import.meta.env.VITE_MSAL_TENANT_ID}`,
+    authority: import.meta.env.VITE_MSAL_AUTHORITY,
+    knownAuthorities: (import.meta.env.VITE_MSAL_KNOWN_AUTHORITIES ?? '')
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter(Boolean),
     redirectUri: import.meta.env.VITE_MSAL_REDIRECT_URI ?? window.location.origin,
     postLogoutRedirectUri: import.meta.env.VITE_MSAL_REDIRECT_URI ?? window.location.origin,
   },
