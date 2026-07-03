@@ -1,41 +1,30 @@
-# CLAUDE.md — Portal: fix SPA deep-link 404 (staticwebapp.config.json not deployed)
+# CLAUDE.md — Portal: remove the duplicate (stale) SWA workflow
 
 ## Context
-Portal's dev SWA is deployed and the app renders at `/`. But navigating DIRECTLY to a client-side
-route (e.g. `/login`) or refreshing on a sub-route returns Azure's "404: Not Found". Cause:
-`staticwebapp.config.json` (which has the `navigationFallback` rewrite to /index.html that makes
-SPA routing work) lives in the REPO ROOT and is NOT copied into the build output `dist/`, so the
-deployed Static Web App never sees it.
+Portal's `.github/workflows/` contains TWO workflows that both trigger on push to main:
+- `deploy.yml` — the intended pipeline (name: "Deploy Portal (dev)"). Uses OIDC (azure/login@v2,
+  vars.*), fetches the SWA deploy token at runtime via az CLI, writes it to $GITHUB_ENV. This one
+  WORKS.
+- `azure-static-web-apps.yml` — a STALE auto-generated workflow (name: "Deploy PagedataLooM
+  Portal"), created when the Static Web App was provisioned. It expects the deploy token as a
+  GitHub SECRET that does not exist in this repo (we use OIDC + runtime token fetch instead), so it
+  FAILS every push with `deployment_token was not provided`.
 
-Confirmed:
-- `staticwebapp.config.json` exists at repo root
-- it is NOT in `public/`
-- it does NOT appear in `dist/` after build
-
-Vite copies everything in `public/` verbatim into `dist/` at build time. So the fix is to put
-`staticwebapp.config.json` in `public/`.
+Both run on every push → duplicate/racing deploys, and the stale one fails noisily. We want exactly
+ONE workflow: `deploy.yml`.
 
 ## Objective
-Ensure `staticwebapp.config.json` ends up in `dist/` after `vite build`, so the SWA applies the
-navigationFallback and deep links / refreshes work.
+Delete the stale `azure-static-web-apps.yml`, keeping only `deploy.yml`.
 
-## The fix (do this)
-Move `staticwebapp.config.json` from the repo root into `public/`:
-- Copy the existing file to `public/staticwebapp.config.json` (keep its exact contents — the
-  navigationFallback, globalHeaders, mimeTypes block is already correct).
-- Remove the root-level `staticwebapp.config.json` (so there's a single source of truth in
-  `public/`).
-
-Do NOT change the file's contents — only its location.
+## The fix
+- Delete `.github/workflows/azure-static-web-apps.yml`.
+- Do NOT touch `.github/workflows/deploy.yml` (it's the good one).
+- Change nothing else.
 
 ## Verify
-- `public/staticwebapp.config.json` exists.
-- root `staticwebapp.config.json` no longer exists.
-- Run `npx vite build --mode development` and confirm `dist/staticwebapp.config.json` now exists
-  (`Test-Path dist\staticwebapp.config.json` → True).
-- Only file moves — no source/logic changes. `git status` shows the delete + add (and the built
-  `dist` is gitignored, so it won't appear).
+- `.github/workflows/` now contains ONLY `deploy.yml` (Get-ChildItem shows one file).
+- `deploy.yml` is unchanged.
+- `git status` shows only the deletion of azure-static-web-apps.yml.
 
-## Do NOT commit — report back; the human commits + pushes, which re-triggers the deploy.
-After it deploys, navigating directly to https://gray-moss-074a51a03.7.azurestaticapps.net/login
-(and refreshing on any route) should serve the app instead of 404.
+## Do NOT commit — report back; the human commits + pushes. After push, only ONE workflow ("Deploy
+Portal (dev)") should run, and it should be green.
