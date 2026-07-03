@@ -31,19 +31,18 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Get SWA deployment token
-        id: swatoken
         run: |
           TOKEN=$(az staticwebapp secrets list \
             --name swa-pagedataloom-dev-weu \
             --resource-group rg-pagedataloom-dev-weu \
             --query "properties.apiKey" -o tsv)
           echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          echo "SWA_TOKEN=$TOKEN" >> "$GITHUB_ENV"
 
       - name: Deploy to Static Web App
         uses: Azure/static-web-apps-deploy@v1
         with:
-          azure_static_web_apps_api_token: ${{ steps.swatoken.outputs.token }}
+          azure_static_web_apps_api_token: ${{ env.SWA_TOKEN }}
           action: 'upload'
           app_location: 'dist'
           skip_app_build: true
