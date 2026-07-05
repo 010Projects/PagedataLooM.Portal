@@ -54,23 +54,25 @@ function retryUnlessApiError(failureCount: number, error: unknown): boolean {
 
 // ── Query keys ────────────────────────────────────────────────────────────
 export const queryKeys = {
-  auditReadiness: (service: ComplianceService) => ['auditReadiness', service] as const,
-  documents:      (entityKey: string)          => ['documents', entityKey] as const,
+  auditReadiness: (service: ComplianceService | null) => ['auditReadiness', service] as const,
+  documents:      (entityKey: string)                 => ['documents', entityKey] as const,
 }
 
 // ── Audit readiness ───────────────────────────────────────────────────────
-export function useAuditReadiness(service: ComplianceService) {
+// service is null until /api/me seeds the dashboard store — no fetch then
+export function useAuditReadiness(service: ComplianceService | null) {
   return useQuery({
     queryKey: queryKeys.auditReadiness(service),
     queryFn: async () => {
       try {
-        const path = SERVICE_CONFIG[service].auditReadinessPath
+        const path = SERVICE_CONFIG[service!].auditReadinessPath
         const { data } = await apiClient.get<ApiEnvelope<AuditReadinessResponse>>(path)
         return unwrap(data)
       } catch (e) {
         throw toApiError(e)
       }
     },
+    enabled: !!service,
     staleTime: 5 * 60 * 1000,
     retry: retryUnlessApiError,
   })
@@ -156,9 +158,10 @@ export function useUpdateNotificationConfig(tenantId: string | null | undefined)
 }
 
 // ── Evidence pack ─────────────────────────────────────────────────────────
-export function useEvidencePack(service: ComplianceService) {
+export function useEvidencePack(service: ComplianceService | null) {
   return useMutation({
     mutationFn: async (request: EvidencePackRequest) => {
+      if (!service) throw new ApiRequestError('NO_SERVICE', 'No service selected')
       const path = SERVICE_CONFIG[service].evidencePackPath
       let response
       try {

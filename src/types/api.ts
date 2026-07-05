@@ -135,10 +135,24 @@ export interface CredentialRecord {
 
 export type ComplianceService = 'sqas' | 'accreditation' | 'bbbee'
 
+// ── /api/me bootstrap (confirmed contract, backend commit 5554e79) ────────
+// PlatformAdmin → tenantName null, subscribedServices []. A non-admin may
+// ALSO have [] (no services configured) — distinguish by isPlatformAdmin.
+export interface MeData {
+  tenantId: string
+  tenantName: string | null            // null for PlatformAdmin
+  isPlatformAdmin: boolean
+  role: 'PlatformAdmin' | 'TenantAdmin' | 'TenantUser' | 'ComplianceUser' | 'Viewer' | 'EntityUser'
+  email: string
+  subscribedServices: ComplianceService[]   // lowercase, may be []
+}
+
+export type MeResponse = ApiEnvelope<MeData>
+
+// Tenant identity is NOT per-service — it comes from /api/me (MeData.tenantName).
 export const SERVICE_CONFIG = {
   sqas: {
     label: 'SQAS',
-    tenant: 'RS Carriers',
     threadColor: '#60A5FA',   // Regulatory dark (on navy)
     threadColorLight: '#1E40AF',
     auditReadinessPath: '/api/sqas/audit-readiness',
@@ -146,7 +160,6 @@ export const SERVICE_CONFIG = {
   },
   accreditation: {
     label: 'Accreditation',
-    tenant: 'Southern Labs',
     threadColor: '#34D399',   // Operational dark
     threadColorLight: '#065F46',
     auditReadinessPath: '/api/accreditation/audit-readiness',
@@ -154,7 +167,6 @@ export const SERVICE_CONFIG = {
   },
   bbbee: {
     label: 'B-BBEE',
-    tenant: 'EmpowerDEX',
     threadColor: '#818CF8',   // Legal dark
     threadColorLight: '#312E7A',
     auditReadinessPath: '/api/bbbee/audit-readiness',

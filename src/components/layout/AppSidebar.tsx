@@ -25,7 +25,7 @@ interface SidebarEntity {
 
 export function AppSidebar() {
   const { activeService, activeEntityKey, subscribedServices, setService, setEntityKey } = useDashboardStore()
-  const { isTenantAdmin, isPlatformAdmin, isComplianceUser } = useAuthStore()
+  const { me, isTenantAdmin, isPlatformAdmin, isComplianceUser } = useAuthStore()
   const navigate = useNavigate()
   const location = useLocation()
   const isSettings = location.pathname.startsWith('/settings')
@@ -50,7 +50,7 @@ export function AppSidebar() {
   const subscriptionInactive =
     error instanceof ApiRequestError && error.code === 'SUBSCRIPTION_INACTIVE'
 
-  // While the probe is running, show the search box and a brief loading note
+  // While /api/me bootstrap is running, show the search box and a brief loading note
   if (subscribedServices === null) {
     return (
       <aside style={asideStyle}>
@@ -75,6 +75,16 @@ export function AppSidebar() {
             No active compliance subscriptions.
           </p>
         </div>
+      </aside>
+    )
+  }
+
+  // Subscribed but nothing selected yet — bootstrap seeds the first service,
+  // so this only flashes between store updates
+  if (activeService === null) {
+    return (
+      <aside style={asideStyle}>
+        <SearchBox />
       </aside>
     )
   }
@@ -153,7 +163,7 @@ export function AppSidebar() {
                   background: SERVICE_CONFIG[activeService].threadColorLight,
                   display: 'inline-block',
                 }} />
-                {SERVICE_CONFIG[activeService].label} · {SERVICE_CONFIG[activeService].tenant}
+                {SERVICE_CONFIG[activeService].label}{me?.tenantName ? ` · ${me.tenantName}` : ''}
               </p>
             </div>
 

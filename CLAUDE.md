@@ -1,152 +1,134 @@
-# CLAUDE.md — Portal (dev): env-driven authority fix + dev config + deploy pipeline
+# CLAUDE.md — Portal: consume GET /api/me (fix tenant/service display)
 
-## Context
-PagedataLooM Portal — React/Vite customer-facing SPA. Deploying the DEV environment first.
-Azure side ready:
-- Dev SWA deployed: `swa-pagedataloom-dev-weu` in `rg-pagedataloom-dev-weu`,
-  hostname `gray-moss-074a51a03.7.azurestaticapps.net`
-- Portal dev deploy identity (OIDC): client `ad1e84c3-7020-40ad-b50f-f41c3dd795d6`, federated to
-  `repo:010Projects/PagedataLooM.Portal:ref:refs/heads/main`, Contributor on `rg-pagedataloom-dev-weu`
-- Portal dev app registration (customer sign-in): client `bca4a6c5-a364-4413-a465-835987013a6f`
-  in the PagedataLooM-Dev External ID tenant (`c5497d2a-...`)
+## Scope guardrail
+FRONTEND ONLY (Portal repo `010Projects/PagedataLooM.Portal`). Do NOT write or assume backend
+code. `/api/me` is a CONFIRMED, DEPLOYED backend endpoint (commit 5554e79, live on dev). We consume
+it; we do not change it.
 
-Portal is customer-facing → dev/prod config is BUILD-TIME (no runtime env switch; a customer sees
-exactly one environment). This task does DEV only; prod is a later mirror.
+## Why
+Today the Portal hardcodes tenant "RS Carriers" onto the `sqas` service in SERVICE_CONFIG and
+defaults `activeService` to `'sqas'`, so EVERY signed-in user (including PlatformAdmins with no
+tenant) wrongly sees "RS Carriers / SQAS". Replace this with real data from `/api/me`.
 
-## Three parts
-A. Fix `src/lib/msal-config.ts` — the authority is currently hardcoded to the WORKFORCE endpoint
-   `login.microsoftonline.com`, which is WRONG for External ID customers. Make it env-driven so it
-   uses the External ID `ciamlogin.com` endpoint.
-B. Add `.env.development` with the dev build config (non-secret public client ID etc.).
-C. Add `.github/workflows/deploy.yml` — build with dev config, deploy to the dev SWA via OIDC.
-
-## Constraints
-- Do NOT hardcode tenant/client values in msal-config.ts — read from import.meta.env.
-- The client IDs here are NON-SECRET public SPA client IDs — safe to commit in .env.development.
-- Do NOT commit .env.local or .env.*.local (already gitignored — leave them alone).
-- Pipeline: OIDC only (no stored secret), `vars.AZURE_CLIENT_ID` etc., NO GitHub environment
-  (federated subject is branch-based), fetch SWA deploy token at runtime via az CLI (do NOT store).
-- Build stays `tsc -b && vite build`; output dir `dist`.
-- Preserve MSW toggle (VITE_ENABLE_MSW) and all existing Portal features.
+## Confirmed /api/me contract (do not deviate)
+Standard envelope `{ success, data, error, correlationId }`. `data`:
+```typescript
+interface MeData {
+  tenantId: string
+  tenantName: string | null            // null for PlatformAdmin
+  isPlatformAdmin: boolean
+  role: 'PlatformAdmin' | 'TenantAdmin' | 'TenantUser' | 'ComplianceUser' | 'Viewer' | 'EntityUser'
+  email: string
+  subscribedServices: ('sqas' | 'accreditation' | 'bbbee')[]   // lowercase, may be []
+}
+```
+Behaviours: PlatformAdmin → `subscribedServices: []`, `tenantName: null`. Tenant users →
+populated lowercase services. A NON-admin user may also have `[]` (no services configured) — this
+is DIFFERENT from PlatformAdmin and MUST be distinguished by `isPlatformAdmin`, NOT by empty array.
 
 ---
 
-## Part A — src/lib/msal-config.ts (authority fix)
+## Task 1 — types: add MeData
+In `src/types/api.ts`, add the `MeData` interface exactly as above (and a `MeResponse` = the
+envelope wrapping it if the codebase types envelopes explicitly). Keep `ComplianceService` =
+`'sqas' | 'accreditation' | 'bbbee'`.
 
-Change the `authority` line so it reads a full authority URL from env, with knownAuthorities, and
-falls back sensibly. Replace:
-```ts
-    authority: `https://login.microsoftonline.com/${import.meta.env.VITE_MSAL_TENANT_ID}`,
-```
-with an env-driven authority + knownAuthorities:
-```ts
-    authority: import.meta.env.VITE_MSAL_AUTHORITY,
-    knownAuthorities: (import.meta.env.VITE_MSAL_KNOWN_AUTHORITIES ?? '')
-      .split(',')
-      .map((s: string) => s.trim())
-      .filter(Boolean),
-```
-Keep clientId, redirectUri, postLogoutRedirectUri, cache, system exactly as they are.
-(The apiScope via VITE_MSAL_API_SCOPE and the loginRequest/tokenRequest stay unchanged.)
+## Task 2 — auth store: hold the bootstrap result
+In `src/stores/auth-store.ts`, add fields for the `/api/me` result:
+- `me: MeData | null` (null = not yet bootstrapped)
+- `meStatus: 'idle' | 'loading' | 'ready' | 'error'`
+- setters: `setMe(me)`, `setMeStatus(status)`, and `clearMe()` (for account-switch invalidation).
 
-## Part B — .env.development (dev build config)
-Create `.env.development` at repo root (Vite auto-loads it for `vite build` in development mode
-and `npm run dev`). Content:
-```
-VITE_MSAL_CLIENT_ID=bca4a6c5-a364-4413-a465-835987013a6f
-VITE_MSAL_TENANT_ID=c5497d2a-27f6-411d-b937-468c820e2095
-VITE_MSAL_AUTHORITY=https://pagedataloomdev.ciamlogin.com/c5497d2a-27f6-411d-b937-468c820e2095
-VITE_MSAL_KNOWN_AUTHORITIES=pagedataloomdev.ciamlogin.com
-VITE_MSAL_API_SCOPE=api://29a7655c-aa15-4765-8eef-20c6af7a7126/access_as_user
-VITE_MSAL_REDIRECT_URI=https://gray-moss-074a51a03.7.azurestaticapps.net
-VITE_API_BASE_URL=https://func-pageloom-dev-weu.azurewebsites.net
-VITE_APP_ENV=development
-VITE_ENABLE_MSW=false
-```
-NOTE: these are non-secret public client IDs + public endpoints — safe to commit. Do NOT put any
-secret here.
+## Task 3 — bootstrap hook: call /api/me ONCE per authenticated session
+Create `src/hooks/useMeBootstrap.ts`:
+- Runs after authentication (use the existing auth/isAuthenticated signal, same pattern as the old
+  useSubscriptionProbe).
+- Calls `GET /api/me` via the existing `apiClient` EXACTLY ONCE per session (guard on
+  `meStatus === 'idle'`, set 'loading' immediately to prevent re-entry). NEVER call on render, never
+  poll.
+- On success: `setMe(data)`, `setMeStatus('ready')`, and seed the dashboard store:
+  `setSubscribedServices(data.subscribedServices)`; set `activeService` to
+  `data.subscribedServices[0] ?? null`.
+- On failure (network / 5xx / 403 / malformed envelope / success:false): `setMeStatus('error')`.
+  Do NOT sign out, do NOT throw to a blank screen.
+- **Account-switch invalidation:** detect MSAL active-account change; on change call `clearMe()` +
+  reset `meStatus` to 'idle' so the next render re-bootstraps for the new identity. A stale `me`
+  from a previous account is a cross-tenant display bug — this guard is REQUIRED.
 
-IMPORTANT — the pipeline builds in production mode by default (`vite build`), which loads
-`.env.production`, NOT `.env.development`. Two options — pick the one that fits how the pipeline
-should build DEV:
-  (1) Simplest for now: have the workflow build with `--mode development` so Vite loads
-      `.env.development`. (Set in the workflow build step: `npx vite build --mode development`,
-      keeping `tsc -b` before it.)
-  (2) Later, for prod, add `.env.production` with prod values and build normally.
-Use option (1) for this dev pipeline so `.env.development` is the source of truth.
+## Task 4 — dashboard store: activeService nullable, no hardcoded default
+In `src/stores/dashboard-store.ts`:
+- Change `activeService: ComplianceService` → `activeService: ComplianceService | null`.
+- Change the INITIAL value from `'sqas'` to `null`.
+- `setService` unchanged (still sets a concrete service).
+Update all readers of `activeService` to handle null (see Task 6).
 
-## Part C — .github/workflows/deploy.yml
-```yaml
-name: Deploy Portal (dev)
+## Task 5 — REMOVE the old probe + decouple tenant from SERVICE_CONFIG
+- Delete `src/hooks/useSubscriptionProbe.ts` and its usage (replaced by useMeBootstrap). Remove its
+  import/call in `AppLayout.tsx`.
+- In `src/types/api.ts` SERVICE_CONFIG: the `tenant` field is now WRONG (tenant comes from /api/me,
+  not per-service). REMOVE the `tenant` property from each SERVICE_CONFIG entry (keep label,
+  colors, paths). Fix any references to `SERVICE_CONFIG[x].tenant`.
 
-on:
-  push:
-    branches: [main]
+## Task 6 — AppLayout / AppHeader: render from real data
+`src/components/layout/AppLayout.tsx`:
+- Call `useMeBootstrap()` (replacing useSubscriptionProbe).
+- Read `me`, `meStatus` from auth store and `activeService`, `subscribedServices` from dashboard store.
+- **Gate on meStatus:**
+  - `loading`/`idle` → a lightweight loading state (not the full dashboard shell).
+  - `error` → a RETRYABLE error state (message + Retry button that re-triggers the bootstrap by
+    resetting meStatus to 'idle'). Do NOT render the dashboard shell. Do NOT sign out. Copy:
+    the session is authenticated but couldn't load your workspace — offer Retry.
+  - `ready` → render the shell (below).
+- **Breadcrumb tenant:** pass `me.tenantName` (may be null → render no tenant segment / a
+  PlatformAdmin label). Do NOT use SERVICE_CONFIG for tenant anymore.
+- **Service segment:** from `activeService` (null → no service segment).
 
-permissions:
-  id-token: write
-  contents: read
+`src/components/layout/AppHeader.tsx`:
+- Tenant segment renders only when `tenantName` is non-null.
+- Add a **service dropdown/selector** populated from `subscribedServices` (the user's real
+  services). Selecting one calls `setService`. If `subscribedServices` has 0 or 1 items, render a
+  static label or nothing rather than a pointless dropdown (1 item = just show it; 0 = none).
 
-jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Install
-        run: npm ci
-      - name: Build (dev mode)
-        run: |
-          npx tsc -b
-          npx vite build --mode development
+## Task 7 — the three end states (distinguish by isPlatformAdmin, NOT empty array)
+When `meStatus === 'ready'`:
+- **PlatformAdmin** (`me.isPlatformAdmin === true`): no compliance service tabs. Show a
+  PlatformAdmin view/placeholder (e.g. "Platform administration" + note that tenant selection is
+  coming) — NOT a compliance dashboard, NOT the empty-services message. tenantName is null → don't
+  show a tenant breadcrumb.
+- **Non-admin with `subscribedServices: []`**: a named "No compliance services configured for your
+  organisation" empty state (show tenantName). NEVER a blank dashboard. This is DISTINCT from
+  PlatformAdmin.
+- **Tenant user with services**: normal dashboard; service tabs = subscribedServices; activeService
+  = first (already seeded); tenant breadcrumb = tenantName.
 
-      - name: Azure login (OIDC, no secret)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+## Task 8 — MSW handlers (same change, required)
+In the shared MSW handlers (`src/test/msw/handlers.ts` — the project's single shared handler array),
+add `/api/me` handlers behind the MSW setup, matching the locked envelope, covering:
+1. tenant user, multiple services (e.g. ['sqas','accreditation'])
+2. tenant user, one service (['sqas'])
+3. PlatformAdmin (isPlatformAdmin true, tenantName null, [])
+4. non-admin, empty subscriptions (isPlatformAdmin false, tenantName set, [])
+5. failure response in the standard envelope (success:false / error) to exercise the error state
+Make it possible to select which variant per test (e.g. a helper or override), so tab-rendering and
+empty/error states are testable WITHOUT live role-switching.
 
-      - name: Get SWA deployment token
-        id: swatoken
-        run: |
-          TOKEN=$(az staticwebapp secrets list \
-            --name swa-pagedataloom-dev-weu \
-            --resource-group rg-pagedataloom-dev-weu \
-            --query "properties.apiKey" -o tsv)
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+## Task 9 — tests
+Mirror existing test conventions (route tables for RequireAuth-style tests, `toHaveStyle` for
+colors, payload-property assertions). Cover:
+- bootstrap success seeds subscribedServices + activeService (first service)
+- account switch clears me + re-bootstraps (no stale cross-tenant data)
+- PlatformAdmin → no service tabs, PlatformAdmin view
+- non-admin empty subscriptions → empty state (NOT PlatformAdmin view, NOT blank)
+- /api/me failure → retryable error state, shell NOT rendered, not signed out
+- service dropdown lists exactly subscribedServices; selecting sets activeService
 
-      - name: Deploy to Static Web App
-        uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ steps.swatoken.outputs.token }}
-          action: 'upload'
-          app_location: 'dist'
-          skip_app_build: true
-```
+## Verify
+- `npm run test` (vitest run) green; report the test count.
+- `npx tsc -b && npx vite build --mode development` builds clean (activeService null-handling
+  compiles).
+- No remaining references to `SERVICE_CONFIG[...].tenant` or `useSubscriptionProbe`.
 
-## Verify after edit
-- `npm run build` still succeeds (or `npx tsc -b && npx vite build --mode development`)
-- msal-config.ts reads VITE_MSAL_AUTHORITY (no hardcoded login.microsoftonline.com left)
-- .env.development exists with the dev values; no .env.local committed
-- deploy.yml uses azure/login@v2 + vars.*, no stored secret, no GitHub environment
-- If the lock file is Windows-generated and `npm ci` fails on Linux with missing optional native
-  deps (like zOz hit with @emnapi/*), regenerate cross-platform:
-  `npm install --os=linux --cpu=x64 --include=optional` then commit package-lock.json.
-
-## After Claude Code — human steps
-1. Repo VARIABLES on 010Projects/PagedataLooM.Portal (Settings → Secrets and variables → Actions →
-   Variables tab, NOT secrets):
-   - AZURE_CLIENT_ID = ad1e84c3-7020-40ad-b50f-f41c3dd795d6
-   - AZURE_TENANT_ID = e1f6457f-dca9-4e65-9782-6eb63cfd6a58
-   - AZURE_SUBSCRIPTION_ID = aa56e865-753e-4f0d-948c-5d9a36629980
-2. Add redirect URI on the Portal DEV app registration (bca4a6c5..., in PagedataLooM-Dev tenant):
-   Authentication → Single-page application → add
-   `https://gray-moss-074a51a03.7.azurestaticapps.net` → Save
-3. Commit + push to main → pipeline builds & deploys to swa-pagedataloom-dev-weu
-4. Visit https://gray-moss-074a51a03.7.azurestaticapps.net → sign in as a dev tenant user →
-   confirm Portal loads and auth works against the dev External ID tenant.
+## Do NOT commit — report back with: test count, and confirm the five MSW variants + failure/retry
+state are covered. (These map to the evidence the PM chat needs: tenant-user tabs, PlatformAdmin
+no-tabs, non-admin empty state, MSW variants committed, failure/retry works.)
 ```

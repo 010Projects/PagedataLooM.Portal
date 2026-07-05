@@ -11,7 +11,6 @@ import { UploadPanel } from '@/features/upload/UploadPanel'
 
 export function ComplianceDashboard() {
   const { activeService, activeEntityKey } = useDashboardStore()
-  const svc = SERVICE_CONFIG[activeService]
   const [uploadOpen, setUploadOpen] = useState(false)
 
   const { data: documents, isLoading: docsLoading } = useDocuments(activeEntityKey)
@@ -34,8 +33,8 @@ export function ComplianceDashboard() {
     getSortedRowModel: getSortedRowModel(),
   })
 
-  // No entity selected — prompt user
-  if (!activeEntityKey) {
+  // No service (pre-bootstrap) or no entity selected — prompt user
+  if (!activeService || !activeEntityKey) {
     return (
       <div style={{
         padding: '2rem', display: 'flex', alignItems: 'center',
@@ -57,6 +56,8 @@ export function ComplianceDashboard() {
       </div>
     )
   }
+
+  const svc = SERVICE_CONFIG[activeService]
 
   return (
     <div style={{

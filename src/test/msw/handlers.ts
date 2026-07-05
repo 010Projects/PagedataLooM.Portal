@@ -4,6 +4,7 @@ import type {
   AuditReadinessResponse,
   CredentialRecord,
   DocumentsResponse,
+  MeData,
   UploadResponse,
 } from '@/types/api'
 
@@ -132,10 +133,65 @@ const MOCK_CREDENTIAL_EXPIRED: CredentialRecord = {
   fileName:           'completion-certificate-stu003.pdf',
 }
 
+// ── /api/me fixtures — the locked bootstrap contract ─────────────────────
+// PlatformAdmin: tenantName null + []. Non-admin with [] is a DIFFERENT
+// state (no services configured) — distinguished by isPlatformAdmin.
+export const ME_FIXTURES = {
+  tenantMultiService: {
+    tenantId: 'rsc_prod_001',
+    tenantName: 'RS Carriers',
+    isPlatformAdmin: false,
+    role: 'TenantAdmin',
+    email: 'Bheki@rscarriers.co.za',
+    subscribedServices: ['sqas', 'accreditation'],
+  },
+  tenantSingleService: {
+    tenantId: 'rsc_prod_001',
+    tenantName: 'RS Carriers',
+    isPlatformAdmin: false,
+    role: 'ComplianceUser',
+    email: 'ops@rscarriers.co.za',
+    subscribedServices: ['sqas'],
+  },
+  platformAdmin: {
+    tenantId: 'platform',
+    tenantName: null,
+    isPlatformAdmin: true,
+    role: 'PlatformAdmin',
+    email: 'admin@pagedataloom.co.za',
+    subscribedServices: [],
+  },
+  nonAdminNoServices: {
+    tenantId: 'newco_prod_001',
+    tenantName: 'NewCo Logistics',
+    isPlatformAdmin: false,
+    role: 'TenantUser',
+    email: 'user@newco.co.za',
+    subscribedServices: [],
+  },
+} satisfies Record<string, MeData>
+
+export type MeVariant = keyof typeof ME_FIXTURES | 'failure'
+
+// Per-test variant selection: server.use(meHandler('platformAdmin'))
+export function meHandler(variant: MeVariant) {
+  return http.get('*/api/me', () =>
+    variant === 'failure'
+      ? HttpResponse.json(
+          fail('ME_LOOKUP_FAILED', 'Could not resolve the signed-in user.'),
+          { status: 500 }
+        )
+      : HttpResponse.json(ok<MeData>(ME_FIXTURES[variant]))
+  )
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────
 // Unsubscribed services return the real backend code (SUBSCRIPTION_INACTIVE)
 // with HTTP 403, exactly as observed in Portal-C discovery.
 export const handlers = [
+  // Default /api/me — tenant user with two services; tests override per variant
+  meHandler('tenantMultiService'),
+
   http.get('*/api/sqas/audit-readiness', () =>
     HttpResponse.json(MOCK_AUDIT_READINESS)),
 

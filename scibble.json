@@ -1,3 +1,189 @@
 PagedataLooM ClientId 315cc6bd-5e2f-4e09-bcfa-86134f12d263
 PagedataLooM Objectid 2cbea380-abe5-4a1e-a39f-728e5d874e1b
 TenantId c0509dbe-3d08-4df5-8339-f03214dbe954
+
+PS C:\Users\Bheki\source\repos\PagedataLooM.Portal> cd C:\Users\Bheki\source\repos\PagedataLooM.Portal
+PS C:\Users\Bheki\source\repos\PagedataLooM.Portal> 
+PS C:\Users\Bheki\source\repos\PagedataLooM.Portal> az account show --query "{tenant:tenantId, user:user.name}" -o table
+Tenant                                User
+------------------------------------  ----------------------
+e1f6457f-dca9-4e65-9782-6eb63cfd6a58  Bheki@pagedataloom.com
+PS C:\Users\Bheki\source\repos\PagedataLooM.Portal> # expect e1f6457f... / Bheki@pagedataloom.com
+PS C:\Users\Bheki\source\repos\PagedataLooM.Portal> 
+PS C:\Users\Bheki\source\repos\PagedataLooM.Portal> az deployment group create `
+>>   --resource-group rg-pagedataloom-prod-weu `
+>>   --name "portal-prod-$(Get-Date -Format yyyyMMdd-HHmmss)" `
+>>   --template-file infrastructure/bicep/portal-main.bicep `
+>>   --parameters environment=prod
+A new Bicep release is available: v0.44.1. Upgrade now by running "az bicep upgrade".
+C:\Users\Bheki\source\repos\PagedataLooM.Portal\infrastructure\bicep\modules\staticWebApp.bicep(32,33) : Warning outputs-should-not-contain-secrets: Outputs should not contain secrets. Found possible secret: function 'listSecrets' [https://aka.ms/bicep/linter-diagnostics#outputs-should-not-contain-secrets]
+C:\Users\Bheki\source\repos\PagedataLooM.Portal\infrastructure\bicep\modules\staticWebApp.bicep(32,33) : Warning use-resource-symbol-reference: Use a resource reference instead of invoking function "listSecrets". This simplifies the syntax and allows Bicep to better understand your deployment dependency graph. [https://aka.ms/bicep/linter-diagnostics#use-resource-symbol-reference]
+
+{
+  "id": "/subscriptions/aa56e865-753e-4f0d-948c-5d9a36629980/resourceGroups/rg-pagedataloom-prod-weu/providers/Microsoft.Resources/deployments/portal-prod-20260704-123009",
+  "location": null,
+  "name": "portal-prod-20260704-123009",
+  "properties": {
+    "correlationId": "d980f7cb-946a-48a1-bb68-7c8bf3f223c4",
+    "debugSetting": null,
+    "dependencies": [],
+    "diagnostics": null,
+    "duration": "PT8.6709843S",
+    "error": null,
+    "extensions": [],
+    "mode": "Incremental",
+    "onErrorDeployment": null,
+    "outputResources": [
+      {
+        "apiVersion": null,
+        "extension": null,
+        "id": "/subscriptions/aa56e865-753e-4f0d-948c-5d9a36629980/resourceGroups/rg-pagedataloom-prod-weu/providers/Microsoft.Web/staticSites/swa-pagedataloom-prod-weu",
+        "identifiers": null,
+        "resourceGroup": "rg-pagedataloom-prod-weu",
+        "resourceType": "Microsoft.Web/staticSites"
+      }
+    ],
+    "outputs": {
+      "deploymentToken": {
+        "type": "String",
+        "value": "78b904c428573f256ba1138896692ccf280fedd6c76fe6c68c15e72f6916c0dd07-706bc2f6-798d-434a-8419-08e1203f494800300180cddfac03"
+      },
+      "portalHostname": {
+        "type": "String",
+        "value": "ashy-rock-0cddfac03.7.azurestaticapps.net"
+      }
+    },
+    "parameters": {
+      "environment": {
+        "type": "String",
+        "value": "prod"
+      }
+    },
+    "parametersLink": null,
+    "providers": [
+      {
+        "id": null,
+        "namespace": "Microsoft.Resources",
+        "providerAuthorizationConsentState": null,
+        "registrationPolicy": null,
+        "registrationState": null,
+        "resourceTypes": [
+          {
+            "aliases": null,
+            "apiProfiles": null,
+            "apiVersions": null,
+            "capabilities": null,
+            "defaultApiVersion": null,
+            "locationMappings": null,
+            "locations": [
+              null
+            ],
+            "properties": null,
+            "resourceType": "deployments",
+            "zoneMappings": null
+          }
+        ]
+      }
+    ],
+    "provisioningState": "Succeeded",
+    "templateHash": "1655848455333119571",
+    "templateLink": null,
+    "timestamp": "2026-07-04T10:30:37.250775+00:00",
+    "validatedResources": null,
+    "validationLevel": null
+  },
+  "resourceGroup": "rg-pagedataloom-prod-weu",
+  "tags": null,
+  "type": "Microsoft.Resources/deployments"
+}
+PS C:\Users\Bheki\source\repos\PagedataLooM.Portal> az ad app create --display-name "github-deploy-portal-prod"      
+{  
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#applications/$entity",
+  "addIns": [],
+  "api": {
+    "acceptMappedClaims": null,
+    "knownClientApplications": [],
+    "oauth2PermissionScopes": [],
+    "preAuthorizedApplications": [],
+    "requestedAccessTokenVersion": null
+  },
+  "appId": "ca0a0608-9048-4358-bb04-ef32a2806c21",
+  "appRoles": [],
+  "applicationTemplateId": null,
+  "certification": null,
+  "createdByAppId": "04b07795-8ddb-461a-bbee-02f9e1bf7b46",
+  "createdDateTime": "2026-07-04T10:33:50.9035054Z",
+  "defaultRedirectUri": null,
+  "deletedDateTime": null,
+  "description": null,
+  "disabledByMicrosoftStatus": null,
+  "displayName": "github-deploy-portal-prod",
+  "groupMembershipClaims": null,
+  "id": "ca199ad9-0079-49c6-ab8e-7fdb1c1c55cc",
+  "identifierUris": [],
+  "info": {
+    "logoUrl": null,
+    "marketingUrl": null,
+    "privacyStatementUrl": null,
+    "supportUrl": null,
+    "termsOfServiceUrl": null
+  },
+  "isDeviceOnlyAuthSupported": null,
+  "isDisabled": null,
+  "isFallbackPublicClient": null,
+  "keyCredentials": [],
+  "nativeAuthenticationApisEnabled": null,
+  "notes": null,
+  "optionalClaims": null,
+  "parentalControlSettings": {
+    "countriesBlockedForMinors": [],
+    "legalAgeGroupRule": "Allow"
+  },
+  "passwordCredentials": [],
+  "publicClient": {
+    "redirectUris": []
+  },
+  "publisherDomain": "pagedataloom.com",
+  "requestSignatureVerification": null,
+  "requiredResourceAccess": [],
+  "samlMetadataUrl": null,
+  "serviceManagementReference": null,
+  "servicePrincipalLockConfiguration": null,
+  "signInAudience": "AzureADMyOrg",
+  "spa": {
+    "redirectUris": []
+  },
+  "tags": [],
+  "tokenEncryptionKeyId": null,
+  "uniqueName": null,
+  "verifiedPublisher": {
+    "addedDateTime": null,
+    "displayName": null,
+    "verifiedPublisherId": null
+  },
+  "web": {
+    "homePageUrl": null,
+    "implicitGrantSettings": {
+      "enableAccessTokenIssuance": false,
+      "enableIdTokenIssuance": false
+    },
+    "logoutUrl": null,
+    "redirectUriSettings": [],
+    "redirectUris": []
+  }
+}
+PS C:\Users\Bheki\source\repos\PagedataLooM.Portal> # → copy the appId
+ copy the 
+PS C:\Users\Bheki\source\repos\PagedataLooM.Portal> 
+
+
+AZURE_SUBSCRIPTION_ID
+aa56e865-753e-4f0d-948c-5d9a36629980
+15 hours ago
+AZURE_TENANT_ID
+e1f6457f-dca9-4e65-9782-6eb63cfd6a58
+
+
+AZURE_CLIENT_ID       = ad1e84c3-7020-40ad-b50f-f41c3dd795d6   (dev deploy identity)
+AZURE_TENANT_ID       = e1f6457f-dca9-4e65-9782-6eb63cfd6a58
+AZURE_SUBSCRIPTION_ID = aa56e865-753e-4f0d-948c-5d9a36629980

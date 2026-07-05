@@ -1,9 +1,12 @@
 import { ThreadRegistryMark, Wordmark } from '@/components/brand'
 import { useAuthStore } from '@/stores/auth-store'
+import { useDashboardStore } from '@/stores'
 import { useAuth } from '@/hooks/useAuth'
+import { SERVICE_CONFIG, type ComplianceService } from '@/types/api'
 
 interface AppHeaderProps {
-  breadcrumb?: { tenant?: string; service?: string }
+  // From /api/me — null for PlatformAdmin (no tenant segment rendered)
+  tenantName?: string | null
 }
 
 function getInitials(name: string): string {
@@ -15,9 +18,13 @@ function getInitials(name: string): string {
     .toUpperCase()
 }
 
-export function AppHeader({ breadcrumb }: AppHeaderProps) {
+export function AppHeader({ tenantName }: AppHeaderProps) {
   const { user } = useAuthStore()
   const { logout } = useAuth()
+  const { activeService, subscribedServices, setService } = useDashboardStore()
+
+  const services = subscribedServices ?? []
+  const showBreadcrumb = tenantName != null || services.length > 0
 
   return (
     <header style={{
@@ -43,30 +50,54 @@ export function AppHeader({ breadcrumb }: AppHeaderProps) {
         <ThreadRegistryMark variant="light" height={24} />
         <Wordmark variant="light" size="sm" />
 
-        {breadcrumb && (
+        {showBreadcrumb && (
           <>
             <div style={{ width: 0.5, height: 18, background: '#E2E8F0' }} />
-            {breadcrumb.tenant && (
+            {tenantName != null && (
               <span style={{
                 fontFamily: '"IBM Plex Sans", sans-serif',
                 fontSize: 11.5,
                 color: '#94A3B8',
               }}>
-                {breadcrumb.tenant}
+                {tenantName}
               </span>
             )}
-            {breadcrumb.service && (
-              <>
-                <span style={{ fontSize: 11.5, color: '#94A3B8' }}>/</span>
-                <span style={{
+            {tenantName != null && services.length > 0 && (
+              <span style={{ fontSize: 11.5, color: '#94A3B8' }}>/</span>
+            )}
+            {/* 1 service = static label; 2+ = selector; 0 = nothing */}
+            {services.length === 1 && (
+              <span style={{
+                fontFamily: '"IBM Plex Sans", sans-serif',
+                fontSize: 11.5,
+                fontWeight: 500,
+                color: '#1E40AF',
+              }}>
+                {SERVICE_CONFIG[services[0]].label}
+              </span>
+            )}
+            {services.length > 1 && (
+              <select
+                aria-label="Service"
+                value={activeService ?? services[0]}
+                onChange={(e) => setService(e.target.value as ComplianceService)}
+                style={{
                   fontFamily: '"IBM Plex Sans", sans-serif',
                   fontSize: 11.5,
                   fontWeight: 500,
                   color: '#1E40AF',
-                }}>
-                  {breadcrumb.service}
-                </span>
-              </>
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                {services.map((svc) => (
+                  <option key={svc} value={svc}>
+                    {SERVICE_CONFIG[svc].label}
+                  </option>
+                ))}
+              </select>
             )}
           </>
         )}

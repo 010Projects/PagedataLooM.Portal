@@ -3,11 +3,11 @@ import { useDashboardStore } from '@/stores/dashboard-store'
 
 describe('useDashboardStore', () => {
   beforeEach(() => {
-    useDashboardStore.setState({ activeService: 'sqas', activeEntityKey: null, subscribedServices: null })
+    useDashboardStore.setState({ activeService: null, activeEntityKey: null, subscribedServices: null })
   })
 
-  it('defaults to sqas with no entity selected', () => {
-    expect(useDashboardStore.getState().activeService).toBe('sqas')
+  it('defaults to no active service and no entity (seeded by /api/me bootstrap)', () => {
+    expect(useDashboardStore.getState().activeService).toBeNull()
     expect(useDashboardStore.getState().activeEntityKey).toBeNull()
   })
 
@@ -16,7 +16,7 @@ describe('useDashboardStore', () => {
     expect(useDashboardStore.getState().activeEntityKey).toBe('RSC-COMP-001')
   })
 
-  it('setService clears the selected entity', () => {
+  it('setService sets a concrete service and clears the selected entity', () => {
     useDashboardStore.getState().setEntityKey('RSC-COMP-001')
     useDashboardStore.getState().setService('bbbee')
     expect(useDashboardStore.getState().activeService).toBe('bbbee')
@@ -24,6 +24,7 @@ describe('useDashboardStore', () => {
   })
 
   it('clearEntity deselects without changing service', () => {
+    useDashboardStore.getState().setService('sqas')
     useDashboardStore.getState().setEntityKey('RSC-COMP-001')
     useDashboardStore.getState().clearEntity()
     expect(useDashboardStore.getState().activeEntityKey).toBeNull()
@@ -31,7 +32,7 @@ describe('useDashboardStore', () => {
   })
 
   describe('subscribedServices', () => {
-    it('starts as null (probe not yet run)', () => {
+    it('starts as null (bootstrap not yet run)', () => {
       expect(useDashboardStore.getState().subscribedServices).toBeNull()
     })
 
