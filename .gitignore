@@ -31,6 +31,9 @@ dist-ssr
 # E2E auth state — contains tokens, never commit
 e2e/.auth/
 
+# Personal scratchpad — may contain pasted CLI output with secrets, never commit
+scibble.json
+
 # Test output
 coverage/
 test-results/
